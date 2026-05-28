@@ -701,7 +701,7 @@ async function loadSession(sid){
     S.messages=[];
     S.toolCalls=[];
     try {
-      await _ensureMessagesLoaded(sid);
+      await _ensureMessagesLoaded(sid, {fullTranscript: true});
     } catch(e) {
       S.messages=inflightMessages;
     }
@@ -1294,13 +1294,17 @@ let _messagesTruncated = false;
 // Older messages are loaded on-demand via _loadOlderMessages().
 const _INITIAL_MSG_LIMIT = 30;
 
-async function _ensureMessagesLoaded(sid) {
+async function _ensureMessagesLoaded(sid, opts) {
   // Already have messages? (e.g. from INFLIGHT restore path, already set)
   if (S.messages && S.messages.length > 0 && S.messages[0] && S.messages[0].role) {
     return;
   }
   // Fetch session messages with a tail window for fast initial load.
-  const data = await api(`/api/session?session_id=${encodeURIComponent(sid)}&messages=1&resolve_model=0&msg_limit=${_INITIAL_MSG_LIMIT}`);
+  // When fullTranscript is requested (INFLIGHT merge path), skip msg_limit
+  // so the server returns the complete message array — this eliminates
+  // truncation ambiguity that causes message splicing errors (#3043).
+  const limit = (opts && opts.fullTranscript) ? '' : `&msg_limit=${_INITIAL_MSG_LIMIT}`;
+  const data = await api(`/api/session?session_id=${encodeURIComponent(sid)}&messages=1&resolve_model=0${limit}`);
   // Guard: api() may have redirected (401) and returned undefined.
   if (!data || !data.session) return;
   _messagesTruncated = !!data.session._messages_truncated;
@@ -1361,12 +1365,36 @@ function _mergeInflightTailMessages(baseMessages, inflightMessages){
     if(inflight[i]&&inflight[i]._live){liveIdx=i;break;}
   }
   if(liveIdx<0) return base;
+  // If the base already has more messages than the inflight snapshot AND the
+  // session is no longer actively streaming, the server transcript is
+  // authoritative and the inflight tail is stale (#3043). Only skip merge when
+  // we are confident the stream has settled — during active streaming the
+  // server's msg_limit truncation can make base.length == inflight.length even
+  // though the live tail is still valid.
+  if(base.length>0 && inflight.length>0 && base.length>=inflight.length && !S.activeStreamId) return base;
   let start=liveIdx;
   if(liveIdx>0&&inflight[liveIdx-1]&&inflight[liveIdx-1].role==='user') start=liveIdx-1;
   const tail=inflight.slice(start).filter(m=>m&&m.role);
   const merged=[...base];
   for(const msg of tail){
-    const duplicate=merged.slice(-Math.max(5,tail.length+2)).some(existing=>_sameTranscriptMessage(existing,msg));
+    // Widen the dedup window to cover the entire tail + a generous margin.
+    // Also treat partial-content matches as duplicates: a streaming _live
+    // message may have less text than the settled server version.
+    const window=Math.max(10,tail.length+5);
+    const candidates=merged.slice(-window);
+    const msgText=_messageComparableText(msg);
+    const duplicate=candidates.some(existing=>{
+      if(_sameTranscriptMessage(existing,msg)) return true;
+      // Partial match: if the existing message starts with or contains the
+      // inflight text (or vice versa), treat as duplicate. Only apply to
+      // messages longer than 30 chars to avoid false positives on short
+      // responses like "Yes", "OK", "Done" (#3043).
+      if(msg.role==='assistant'&&existing.role==='assistant'&&msgText&&msgText.length>30){
+        const existingText=_messageComparableText(existing);
+        if(existingText&&existingText.length>30&&(existingText.startsWith(msgText)||msgText.startsWith(existingText))) return true;
+      }
+      return false;
+    });
     if(!duplicate) merged.push(msg);
   }
   return merged;
