@@ -1294,11 +1294,13 @@ let _messagesTruncated = false;
 // Older messages are loaded on-demand via _loadOlderMessages().
 const _INITIAL_MSG_LIMIT = 30;
 
-// Fetch and populate S.messages for a session.  Two entry points:
+// Fetch and populate S.messages for a session.  Two entry points keep the
+// full-transcript fetch scoped to where it is actually needed:
 //   _ensureMessagesLoaded  — tail window (30 msgs), for normal cold loads.
-//   _loadFullTranscript    — no limit, for INFLIGHT merge where the complete
-//                            history is needed to splice with the live stream
-//                            without truncation ambiguity (#3043).
+//   _loadFullTranscript    — no limit, called ONLY from the INFLIGHT merge
+//                            path, where the complete history is needed to
+//                            splice with the live stream without truncation
+//                            ambiguity. Cold loads never pay this cost.
 
 async function _loadFullTranscript(sid) {
   return _fetchAndPopulateMessages(sid, '');
@@ -1375,10 +1377,18 @@ function _mergeInflightTailMessages(baseMessages, inflightMessages){
   if(liveIdx<0) return base;
   // If the base already has more messages than the inflight snapshot AND the
   // session is no longer actively streaming, the server transcript is
-  // authoritative and the inflight tail is stale (#3043). Only skip merge when
+  // authoritative and the inflight tail is stale. Only skip merge when
   // we are confident the stream has settled — during active streaming the
   // server's msg_limit truncation can make base.length == inflight.length even
   // though the live tail is still valid.
+  //
+  // Staleness guard rationale (base.length >= inflight.length && !S.activeStreamId):
+  // a settled session (no activeStreamId) whose server transcript is at least
+  // as long as the persisted inflight snapshot means the inflight buffer is a
+  // leftover from a finished stream — merging its tail would re-introduce
+  // messages the server has already superseded. Requiring BOTH conditions
+  // avoids dropping a still-valid live tail mid-stream, where truncation can
+  // momentarily make the two lengths equal.
   if(base.length>0 && inflight.length>0 && base.length>=inflight.length && !S.activeStreamId) return base;
   let start=liveIdx;
   if(liveIdx>0&&inflight[liveIdx-1]&&inflight[liveIdx-1].role==='user') start=liveIdx-1;
@@ -1396,7 +1406,7 @@ function _mergeInflightTailMessages(baseMessages, inflightMessages){
       // Partial match: if the existing message starts with or contains the
       // inflight text (or vice versa), treat as duplicate. Only apply to
       // messages longer than 30 chars to avoid false positives on short
-      // responses like "Yes", "OK", "Done" (#3043).
+      // responses like "Yes", "OK", "Done".
       if(msg.role==='assistant'&&existing.role==='assistant'&&msgText&&msgText.length>30){
         const existingText=_messageComparableText(existing);
         if(existingText&&existingText.length>30&&(existingText.startsWith(msgText)||msgText.startsWith(existingText))) return true;

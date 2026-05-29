@@ -21,7 +21,7 @@ async function cancelStream(){
   S.activeStreamId=null;
   setBusy(false);
   // Clear INFLIGHT so stale live messages don't get merged on next session load
-  // (prevents message splicing errors after stop — #3043).
+  // (prevents message splicing errors after stop).
   if(sid && typeof INFLIGHT!=='undefined' && INFLIGHT[sid]){
     delete INFLIGHT[sid];
     if(typeof clearInflightState==='function') clearInflightState(sid);

@@ -1,5 +1,7 @@
 """
-Unit tests for #3042 (Discard popup on background resume) and #3043 (message splicing).
+Unit tests for two frontend fixes: the discard popup that appeared on
+background session resume, and the message-splicing regression where stale
+inflight tails were re-merged after a session reload.
 
 These tests re-implement the patched JavaScript logic in Python to verify
 correctness without needing a JS runtime. The logic is simple enough that
@@ -77,7 +79,7 @@ def merge_inflight_tail_messages(base_messages, inflight_messages, active_stream
     return merged
 
 
-# ─── Tests for #3043: merge logic ───
+# ─── Tests for message-splicing fix: merge logic ───
 
 class TestMergeInflightStaleDetection:
     """Verify stale inflight is discarded when session is idle."""
@@ -172,7 +174,7 @@ class TestMergeInflightDedup:
         assert result[3]['content'] == 'second answer in progress'
 
 
-# ─── Tests for #3042: workspace preview session tracking ───
+# ─── Tests for discard-popup fix: workspace preview session tracking ───
 
 class TestWorkspacePreviewSessionTracking:
     """Verify _lastPreviewSessionId logic."""
@@ -200,7 +202,7 @@ class TestWorkspacePreviewSessionTracking:
         assert should_clear is True
 
 
-# ─── Tests for #3043: cancelStream INFLIGHT cleanup ───
+# ─── Tests for message-splicing fix: cancelStream INFLIGHT cleanup ───
 
 class TestCancelStreamInflightCleanup:
     """Verify cancelStream logic clears INFLIGHT."""

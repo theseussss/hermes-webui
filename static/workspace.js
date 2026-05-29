@@ -316,7 +316,7 @@ async function loadDir(path){
     }
     // Only clear preview when switching to a different session's workspace.
     // Same-session refreshes (e.g. background resume, external update poll)
-    // should preserve the user's open file preview and unsaved edits (#3042).
+    // should preserve the user's open file preview and unsaved edits.
     if(typeof clearPreview==='function' && sessionId!==_lastPreviewSessionId){
       if(typeof _previewDirty!=='undefined'&&_previewDirty){
         showConfirmDialog({title:t('unsaved_confirm'),message:'',confirmLabel:'Discard',danger:true,focusCancel:true}).then(ok=>{if(ok){clearPreview({keepPanelOpen:true});_lastPreviewSessionId=sessionId;}});
