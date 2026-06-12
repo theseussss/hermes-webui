@@ -2224,12 +2224,34 @@ async function restartServer() {
     danger: false,
   });
   if (!ok) return;
+  const restartRequest = async (force) => api('/api/restart', {
+    method: 'POST',
+    body: JSON.stringify(force ? { force: true } : {}),
+  });
   localStorage.removeItem('hermes-webui-server-stopped');
   try {
-    await api('/api/restart', { method: 'POST' });
+    await restartRequest(false);
   } catch (err) {
-    if (typeof setStatus === 'function') setStatus((err && err.message) ? err.message : 'Restart failed');
-    return;
+    let payload = null;
+    try { payload = err && err.body ? JSON.parse(err.body) : null; } catch (_) {}
+    if (err && err.status === 409 && payload && payload.requires_confirmation) {
+      const forceOk = await showConfirmDialog({
+        title: (typeof t === 'function' ? t('settings_restart_force_confirm_title') : 'Active work is still running'),
+        message: (typeof t === 'function' ? t('settings_restart_force_confirm_message') : 'A reply or background run is still in progress. Forcing a restart will interrupt it, and in-progress output may be lost. Restart anyway?'),
+        confirmLabel: (typeof t === 'function' ? t('settings_restart_force_confirm_btn') : 'Restart anyway'),
+        danger: true,
+      });
+      if (!forceOk) return;
+      try {
+        await restartRequest(true);
+      } catch (forceErr) {
+        if (typeof setStatus === 'function') setStatus((forceErr && forceErr.message) ? forceErr.message : 'Restart failed');
+        return;
+      }
+    } else {
+      if (typeof setStatus === 'function') setStatus((err && err.message) ? err.message : 'Restart failed');
+      return;
+    }
   }
   const restartingMsg = (typeof t === 'function' ? t('settings_restart_reloading_message') : 'Restarting server… reconnecting shortly.');
   const wrapper = document.createElement('div');

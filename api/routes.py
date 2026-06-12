@@ -5557,15 +5557,15 @@ def _shutdown_log_value(value, *, default: str = "unknown", max_len: int = 160) 
     return text
 
 
-def _schedule_server_restart(delay: float = 0.3) -> None:
+def _schedule_server_restart(delay: float = 0.3, force: bool = False) -> None:
     """Re-exec the WebUI server process after *delay* seconds."""
     from api.updates import _schedule_restart
 
-    _schedule_restart(delay=delay)
+    _schedule_restart(delay=delay, force=force)
 
 
-def _handle_restart(handler) -> bool:
-    """Restart the WebUI server process when no chat work is active."""
+def _handle_restart(handler, body: dict | None = None) -> bool:
+    """Restart the WebUI server process, optionally after user-confirmed force."""
     from api.updates import _restart_blocked_response, _restart_blocker_snapshot
 
     headers = getattr(handler, "headers", {})
@@ -5581,19 +5581,23 @@ def _handle_restart(handler) -> bool:
         _shutdown_log_value(ua, default="no-ua", max_len=240),
     )
 
+    force = bool((body or {}).get("force"))
     snapshot = _restart_blocker_snapshot()
-    if snapshot.get("restart_blocked"):
+    if snapshot.get("restart_blocked") and not force:
         j(
             handler,
             {
                 "ok": False,
+                "requires_confirmation": True,
                 **_restart_blocked_response("/api/restart", snapshot),
             },
             status=409,
         )
         return True
-    j(handler, {"status": "restarting"})
-    _schedule_server_restart(delay=0.3)
+    if snapshot.get("restart_blocked") and force:
+        logger.warning("[restart-request] force=true with active work: %s", snapshot)
+    j(handler, {"status": "restarting", "forced": force})
+    _schedule_server_restart(delay=0.3, force=force)
     return True
 
 
@@ -5611,6 +5615,9 @@ def _handle_shutdown(handler) -> bool:
         _shutdown_log_value(getattr(handler, "path", None), max_len=240),
         _shutdown_log_value(ua, default="no-ua", max_len=240),
     )
+    # Shutdown is the explicit terminal stop path. Restart has a graceful
+    # default plus a force-confirmed override; shutdown remains immediate so
+    # users keep a reliable way to stop the server.
     j(handler, {"status": "shutting_down"})
     import signal
     import threading
@@ -7294,7 +7301,12 @@ def handle_post(handler, parsed) -> bool:
                 diag.finish()
 
     if parsed.path == "/api/restart":
-        return _handle_restart(handler)
+        try:
+            body = read_body(handler)
+        except ValueError as exc:
+            status = 413 if "too large" in str(exc).lower() else 400
+            return bad(handler, str(exc), status=status)
+        return _handle_restart(handler, body)
 
     if parsed.path == "/api/shutdown":
         return _handle_shutdown(handler)
